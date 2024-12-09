@@ -881,10 +881,11 @@ _mongoc_structured_log_append_server_description (bson_t *bson,
    return stage + 1;
 }
 
-const mongoc_structured_log_builder_stage_t *
-_mongoc_structured_log_append_topology_as_description_json (bson_t *bson,
-                                                            const mongoc_structured_log_builder_stage_t *stage,
-                                                            const mongoc_structured_log_opts_t *opts)
+static void
+_mongoc_structured_log_topology_description_as_json (bson_t *bson,
+                                                     const char *key,
+                                                     const mongoc_topology_description_t *td,
+                                                     const mongoc_structured_log_opts_t *opts)
 {
    const mongoc_topology_description_content_flags_t td_flags =
       MONGOC_TOPOLOGY_DESCRIPTION_CONTENT_FLAG_TYPE | MONGOC_TOPOLOGY_DESCRIPTION_CONTENT_FLAG_SET_NAME |
@@ -897,21 +898,46 @@ _mongoc_structured_log_append_topology_as_description_json (bson_t *bson,
    const mongoc_server_description_content_flags_t server_flags =
       MONGOC_SERVER_DESCRIPTION_CONTENT_FLAG_TYPE | MONGOC_SERVER_DESCRIPTION_CONTENT_FLAG_ADDRESS;
 
+   bson_t inner_bson = BSON_INITIALIZER;
+   mongoc_topology_description_append_contents_to_bson (td, &inner_bson, td_flags, server_flags);
+   size_t json_length;
+   char *json = _mongoc_structured_log_inner_document_to_json (&inner_bson, &json_length, opts);
+   if (json) {
+      bson_append_utf8 (bson, key, -1, json, json_length);
+      bson_free (json);
+   }
+   bson_destroy (&inner_bson);
+}
+
+const mongoc_structured_log_builder_stage_t *
+_mongoc_structured_log_append_topology_as_description_json (bson_t *bson,
+                                                            const mongoc_structured_log_builder_stage_t *stage,
+                                                            const mongoc_structured_log_opts_t *opts)
+{
    const char *key_or_null = stage->arg1.utf8;
    const mongoc_topology_t *topology_or_null = stage->arg2.topology;
    if (key_or_null) {
       if (topology_or_null) {
          mc_shared_tpld td = mc_tpld_take_ref (topology_or_null);
-         bson_t inner_bson = BSON_INITIALIZER;
-         mongoc_topology_description_append_contents_to_bson (td.ptr, &inner_bson, td_flags, server_flags);
-         size_t json_length;
-         char *json = _mongoc_structured_log_inner_document_to_json (&inner_bson, &json_length, opts);
-         if (json) {
-            bson_append_utf8 (bson, key_or_null, -1, json, json_length);
-            bson_free (json);
-         }
-         bson_destroy (&inner_bson);
+         _mongoc_structured_log_topology_description_as_json (bson, key_or_null, td.ptr, opts);
          mc_tpld_drop_ref (&td);
+      } else {
+         bson_append_null (bson, key_or_null, -1);
+      }
+   }
+   return stage + 1;
+}
+
+const mongoc_structured_log_builder_stage_t *
+_mongoc_structured_log_append_topology_description_as_json (bson_t *bson,
+                                                            const mongoc_structured_log_builder_stage_t *stage,
+                                                            const mongoc_structured_log_opts_t *opts)
+{
+   const char *key_or_null = stage->arg1.utf8;
+   const mongoc_topology_description_t *topology_description_or_null = stage->arg2.topology_description;
+   if (key_or_null) {
+      if (topology_description_or_null) {
+         _mongoc_structured_log_topology_description_as_json (bson, key_or_null, topology_description_or_null, opts);
       } else {
          bson_append_null (bson, key_or_null, -1);
       }
