@@ -21,6 +21,7 @@
 #include <bson/bson-iso8601-private.h>
 #include <bson/bson-json.h>
 #include <bson/bson-timegm-private.h>
+#include <common-string-private.h>
 
 
 static bool
@@ -282,7 +283,7 @@ _bson_iso8601_date_parse (const char *str, int32_t len, int64_t *out, bson_error
 
 
 void
-_bson_iso8601_date_format (int64_t msec_since_epoch, mcommon_string_t *str)
+_bson_iso8601_date_format (int64_t msecs_since_epoch, mcommon_string_append_t *append)
 {
    time_t t;
    int64_t msecs_part;
@@ -309,9 +310,8 @@ _bson_iso8601_date_format (int64_t msec_since_epoch, mcommon_string_t *str)
 #endif
 
    if (msecs_part) {
-      mcommon_string_append_printf (str, "%s.%03" PRId64 "Z", buf, msecs_part);
+      mcommon_string_appendf (append, "%s.%03" PRId64 "Z", buf, msecs_part);
    } else {
-      mcommon_string_append (str, buf);
-      mcommon_string_append_c (str, 'Z');
+      mcommon_string_appendf (append, "%sZ", buf);
    }
 }

@@ -21,7 +21,6 @@
 #include <bson/bson-json-private.h>
 #include <common-string-private.h>
 #include <bson/bson-iso8601-private.h>
-#include <bson/bson-string-private.h>
 #include <common-cmp-private.h>
 
 #include "common-b64-private.h"

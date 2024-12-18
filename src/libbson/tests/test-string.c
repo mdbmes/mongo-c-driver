@@ -16,7 +16,6 @@
 
 
 #include <bson/bson.h>
-#include <bson/bson-string-private.h>
 
 #include "TestSuite.h"
 #include "test-libmongoc.h"
