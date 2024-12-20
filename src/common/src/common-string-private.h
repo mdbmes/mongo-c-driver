@@ -207,7 +207,6 @@ mcommon_string_append_status (const mcommon_string_append_t *append)
 static BSON_INLINE bool
 mcommon_string_append_bytes (mcommon_string_append_t *append, const char *str, uint32_t len)
 {
-   // Fast path: already hit limit
    if (BSON_UNLIKELY (!mcommon_string_append_status (append))) {
       return false;
    }
@@ -277,7 +276,7 @@ mcommon_string_appendf (mcommon_string_append_t *append, const char *format, ...
  * in-between UTF-8 code points.
  */
 bool
-mcommon_string_vappendf (mcommon_string_append_t *append, const char *format, va_list args);
+mcommon_string_vappendf (mcommon_string_append_t *append, const char *format, va_list args) BSON_GNUC_PRINTF (2, 0);
 
 /**
  * @brief Append one code point to a mcommon_string_t
@@ -294,7 +293,6 @@ mcommon_string_vappendf (mcommon_string_append_t *append, const char *format, va
 static BSON_INLINE bool
 mcommon_string_append_unichar (mcommon_string_append_t *append, bson_unichar_t unichar)
 {
-   // Fast path: already hit limit
    if (BSON_UNLIKELY (!mcommon_string_append_status (append))) {
       return false;
    }

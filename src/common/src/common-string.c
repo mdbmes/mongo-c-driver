@@ -158,7 +158,6 @@ mcommon_string_appendf (mcommon_string_append_t *append, const char *format, ...
 bool
 mcommon_string_vappendf (mcommon_string_append_t *append, const char *format, va_list args)
 {
-   // Fast path: already hit limit
    if (BSON_UNLIKELY (!mcommon_string_append_status (append))) {
       return false;
    }
@@ -178,19 +177,21 @@ mcommon_string_vappendf (mcommon_string_append_t *append, const char *format, va
       // do want that to be available to vsnprintf().
 
       min_format_buffer_capacity = BSON_MIN (min_format_buffer_capacity, max_append_len);
-      mcommon_string_grow_to_capacity (string, old_len + min_format_buffer_len);
-      uint32_t actual_format_buffer_len = BSON_MIN (string->alloc - old_len, max_append_len);
+      mcommon_string_grow_to_capacity (string, old_len + min_format_buffer_capacity);
+      uint32_t alloc = string->alloc;
+      BSON_ASSERT (alloc > 0 && alloc - 1u >= old_len);
       char *format_buffer = string->str + old_len;
-      BSON_ASSERT (actual_format_buffer_len >= min_format_buffer_len);
-      BSON_ASSERT (actual_format_buffer_len < UINT32_MAX);
-      uint32_t format_buffer_alloc = actual_format_buffer_len + 1u;
+      uint32_t actual_format_buffer_capacity = BSON_MIN (alloc - 1u - old_len, max_append_len);
+      BSON_ASSERT (actual_format_buffer_capacity >= min_format_buffer_capacity);
+      BSON_ASSERT (actual_format_buffer_capacity < UINT32_MAX);
+      uint32_t format_buffer_alloc = actual_format_buffer_capacity + 1u;
 
       va_list args_copy;
       va_copy (args_copy, args);
       int format_result = bson_vsnprintf (format_buffer, format_buffer_alloc, format, args_copy);
       va_end (args_copy);
 
-      if (format_result > -1 && format_result <= actual_format_buffer_len) {
+      if (format_result > -1 && format_result <= actual_format_buffer_capacity) {
          // Successful result, no truncation.
          format_buffer[format_result] = '\0';
          string->len = old_len + format_result;
@@ -199,15 +200,15 @@ mcommon_string_vappendf (mcommon_string_append_t *append, const char *format, va
          return true;
       }
 
-      if (actual_format_buffer_len == max_append_len) {
+      if (actual_format_buffer_capacity == max_append_len) {
          // No more space to grow into, this must be the final result.
 
-         if (format_result > -1) {
+         if (format_result > -1 && format_result < UINT32_MAX) {
             // We have truncated output from vsnprintf. Clean it up by removing
             // any partial UTF-8 sequences that might be left on the end.
-            uint32_t truncated_append_len =
-               mcommon_utf8_truncate_len (format_buffer, BSON_MIN (actual_format_buffer_len, (uint32_t) format_result));
-            BSON_ASSERT (truncated_append_len <= actual_format_buffer_len);
+            uint32_t truncated_append_len = mcommon_utf8_truncate_len (
+               format_buffer, BSON_MIN (actual_format_buffer_capacity, (uint32_t) format_result));
+            BSON_ASSERT (truncated_append_len <= actual_format_buffer_capacity);
             format_buffer[truncated_append_len] = '\0';
             string->len = old_len + truncated_append_len;
             append->_max_len_exceeded = true;
@@ -219,12 +220,12 @@ mcommon_string_vappendf (mcommon_string_append_t *append, const char *format, va
       }
 
       // Choose a larger format_buffer_len and try again. Length will be clamped to max_append_len above.
-      if (n > -1 && n < UINT32_MAX) {
-         format_buffer_len = (uint32_t) n + 1u;
-      } else if (format_buffer_len < UINT32_MAX / 2) {
-         format_buffer_len *= 2;
+      if (format_result > -1 && format_result < UINT32_MAX) {
+         min_format_buffer_capacity = (uint32_t) format_result + 1u;
+      } else if (min_format_buffer_capacity < UINT32_MAX / 2) {
+         min_format_buffer_capacity *= 2;
       } else {
-         format_buffer_len = UINT32_MAX;
+         min_format_buffer_capacity = UINT32_MAX - 1u;
       }
    }
 }

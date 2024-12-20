@@ -23,107 +23,57 @@
 #include <common-json-private.h>
 #include <bson/bson-utf8.h>
 
-
 /*
- *--------------------------------------------------------------------------
- *
- * _is_special_char --
- *
- *       Uses a bit mask to check if a character requires special formatting
- *       or not. Called from bson_utf8_escape_for_json.
- *
- * Parameters:
- *       @c: An unsigned char c.
- *
- * Returns:
- *       true if @c requires special formatting. otherwise false.
- *
- * Side effects:
- *       None.
- *
- *--------------------------------------------------------------------------
+ * Test whether a byte may require special processing in mcommon_json_append_escaped.
+ * Returns true for bytes in the range 0x00 - 0x1F, '\\', '\"', and 0xC0.
  */
-
 static BSON_INLINE bool
-_is_special_char (unsigned char c)
+mcommon_json_append_escaped_considers_byte_as_special (uint8_t byte)
 {
-   /*
-   C++ equivalent:
-   std::bitset<256> charmap = [...]
-   return charmap[c];
-   */
-   static const bson_unichar_t charmap[8] = {0xffffffff, // control characters
-                                             0x00000004, // double quote "
-                                             0x10000000, // backslash
-                                             0x00000000,
-                                             0xffffffff,
-                                             0xffffffff,
-                                             0xffffffff,
-                                             0xffffffff}; // non-ASCII
-   const int int_index = ((int) c) / ((int) sizeof (bson_unichar_t) * 8);
-   const int bit_index = ((int) c) & ((int) sizeof (bson_unichar_t) * 8 - 1);
-   return ((charmap[int_index] >> bit_index) & ((bson_unichar_t) 1)) != 0u;
+   static const uint64_t table[4] = {
+      0x00000004ffffffffull, // 0x00-0x1F (control), 0x22 (")
+      0x0000000010000000ull, // 0x5C (')
+      0x0000000000000000ull, // none
+      0x0000000000000001ull, // 0xC0 (Possible two-byte NUL)
+   };
+   return 0 != (table[byte >> 6] & (1ull << (byte & 0x3f)));
 }
 
 /*
- *--------------------------------------------------------------------------
- *
- * _bson_utf8_handle_special_char --
- *
- *       Appends a special character in the correct format when converting
- *       from UTF-8 to JSON. This includes characters that should be escaped
- *       as well as ASCII control characters.
- *
- *       Normal ASCII characters and multi-byte UTF-8 sequences are handled
- *       in bson_utf8_escape_for_json, where this function is called from.
- *
- * Parameters:
- *       @c: A uint8_t ASCII codepoint.
- *       @append: A bounded string append operation
- *
- * Returns:
- *       true if the append is still successful,
- *       false if any truncation has occurred so far.
- *
- * Side effects:
- *       None.
- *
- *--------------------------------------------------------------------------
+ * Measure the number of consecutive non-special bytes.
  */
+static BSON_INLINE uint32_t
+mcommon_json_append_escaped_count_non_special_bytes (const char *str, uint32_t len)
+{
+   uint32_t result = 0;
+   // Good candidate for architecture-specific optimizations.
+   // SSE4 strcspn is nearly what we want, but our table of special bytes would be too large (34 > 16)
+   while (len) {
+      if (mcommon_json_append_escaped_considers_byte_as_special ((uint8_t) *str)) {
+         break;
+      }
+      result++;
+      str++;
+      len--;
+   }
+   return result;
+}
 
 static BSON_INLINE bool
-_bson_utf8_handle_special_char (const uint8_t c, mcommon_string_append_t *append)
+mcommon_json_append_hex_char (mcommon_string_append_t *append, uint16_t c)
 {
-   BSON_ASSERT (c < 0x80u);
-
-   switch (c) {
-   case '"':
-      return mcommon_string_append (append, "\\\"");
-   case '\\':
-      return mcommon_string_append (append, "\\\\");
-   case '\b':
-      return mcommon_string_append (append, "\\b");
-   case '\f':
-      return mcommon_string_append (append, "\\f");
-   case '\n':
-      return mcommon_string_append (append, "\\n");
-   case '\r':
-      return mcommon_string_append (append, "\\r");
-   case '\t':
-      return mcommon_string_append (append, "\\t");
-   default: {
-      // ASCII control character
-      BSON_ASSERT (c < 0x20u);
-
-      const char digits[] = "0123456789abcdef";
-      char codepoint[6] = "\\u0000";
-
-      codepoint[4] = digits[(c >> 4) & 0x0fu];
-      codepoint[5] = digits[c & 0x0fu];
-      return mcommon_string_append_bytes (append, codepoint, sizeof codepoint);
-   }
-   }
+   // Like mcommon_string_appendf (append, "\\u%04x", c) but intended to be more optimizable.
+   static const char digit_table[] = "0123456789abcdef";
+   char hex_char[6];
+   hex_char[0] = '\\';
+   hex_char[1] = 'u';
+   hex_char[2] = digit_table[0xf & (c >> 12)];
+   hex_char[3] = digit_table[0xf & (c >> 8)];
+   hex_char[4] = digit_table[0xf & (c >> 4)];
+   hex_char[5] = digit_table[0xf & c];
+   return mcommon_string_append_bytes (append, hex_char, 6);
 }
+
 
 /*
  *--------------------------------------------------------------------------
@@ -137,9 +87,9 @@ _bson_utf8_handle_special_char (const uint8_t c, mcommon_string_append_t *append
  *       If 'allow_nul' is true, NUL characters and are allowed and encoded as
  *       "\u0000". If 'allow_nul' is false, NUL characters will truncate the
  *       string and cause an unsuccessful return.
- *  cause and any non-ascii cAdditionally, if a NUL
- *       byte is found before @utf8_len bytes, it will be converted to the
- *       two byte UTF-8 sequence.
+ *
+ *       The two-byte sequence "C0 80" is also interpreted as an internal NUL,
+ *       for historical reasons. This sequence is considered invalid according to RFC3629.
  *
  * Parameters:
  *       @str: A UTF-8 encoded string.
@@ -148,7 +98,7 @@ _bson_utf8_handle_special_char (const uint8_t c, mcommon_string_append_t *append
  *
  * Returns:
  *       true on success. false if the append length limit is exceeded, or we encounter invalid UTF-8 in 'str'.
- * 
+ *
  * Side effects:
  *       None.
  *
@@ -158,217 +108,84 @@ _bson_utf8_handle_special_char (const uint8_t c, mcommon_string_append_t *append
 bool
 mcommon_json_append_escaped (mcommon_string_append_t *append, const char *str, uint32_t len, bool allow_nul)
 {
-   BSON_ASSERT_PARAM(append);
-   BSON_ASSERT_PARAM(str);
+   BSON_ASSERT_PARAM (append);
+   BSON_ASSERT_PARAM (str);
 
-   // Gather runs of non-special characters to append at once (at memcpy speeds, faster than iterating over characters)
-   char *run_begin = str;
-   uint32_t run_len = 0;
-
-while (len) {
-   if (_is_special_char(*str)) {
-      // Flush run of non-special characters before a special character
-      if (run_len && !mcommon_string_append_bytes(append, run_begin, run_len)) {
+   // Repeatedly handle runs of non-special bytes punctuated by special bytes.
+   uint32_t non_special_len = mcommon_json_append_escaped_count_non_special_bytes (str, len);
+   while (len) {
+      if (!mcommon_string_append_bytes (append, str, non_special_len)) {
          return false;
       }
-      run_len = 0;
-
-      // Validate length of UTF-8 sequence
-      uint8_t seq_length, first_mask_unused;
-      mcommon_utf8_get_sequence(str, &seq_length, &first_mask_unused);
-      if (seq_length > len) {
-         // Invalid UTF-8
-         return false;
+      str += non_special_len;
+      len -= non_special_len;
+      if (len) {
+         char c = *str;
+         switch (c) {
+         case '"':
+            if (!mcommon_string_append (append, "\\\"")) {
+               return false;
+            }
+            break;
+         case '\\':
+            if (!mcommon_string_append (append, "\\\\")) {
+               return false;
+            }
+            break;
+         case '\b':
+            if (!mcommon_string_append (append, "\\b")) {
+               return false;
+            }
+            break;
+         case '\f':
+            if (!mcommon_string_append (append, "\\f")) {
+               return false;
+            }
+            break;
+         case '\n':
+            if (!mcommon_string_append (append, "\\n")) {
+               return false;
+            }
+            break;
+         case '\r':
+            if (!mcommon_string_append (append, "\\r")) {
+               return false;
+            }
+            break;
+         case '\t':
+            if (!mcommon_string_append (append, "\\t")) {
+               return false;
+            }
+            break;
+         case '\0':
+            if (!allow_nul || !mcommon_json_append_hex_char (append, 0)) {
+               return false;
+            }
+            break;
+         case '\xc0': // Could be a 2-byte NUL, or could begin another non-special run
+            if (len >= 2 && str[1] == '\x80') {
+               if (!allow_nul || !mcommon_json_append_hex_char (append, 0)) {
+                  return false;
+               }
+               str++;
+               len--;
+            } else {
+               // Wasn't "C0 80". Begin a non-special run with the "C0" byte, which is usually special.
+               non_special_len = mcommon_json_append_escaped_count_non_special_bytes (str + 1, len - 1) + 1;
+               continue;
+            }
+            break;
+         default:
+            BSON_ASSERT (c > 0x00 && c < 0x20);
+            if (!mcommon_json_append_hex_char (append, c)) {
+               return false;
+            }
+            break;
+         }
+         str++;
+         len--;
+         non_special_len = mcommon_json_append_escaped_count_non_special_bytes (str, len);
       }
-
-
-
-static BSON_INLINE void
-mcommon_utf8_get_sequence (const char *utf8,    /* IN */
-                           uint8_t *seq_length, /* OUT */
-                           uint8_t *first_mask) /* OUT */
-{
-   unsigned char c = *(const unsigned char *) utf8;
-   uint8_t m;
-
-   } else {
-      run_len++
    }
-
-   str++;
-   len--;
-}
-
-      return run_len == 0 || mcommon_string_append_bytes(append, run_begin, run_len);
-      }
-
-
-   do {
-
-
-
-      // Check if expected char length goes past end
-      // bson_utf8_get_char will crash without this check
-      {
-         uint8_t mask;
-         uint8_t length_of_char;
-
-         mcommon_utf8_get_sequence (utf8, &length_of_char, &mask);
-         if (utf8 > end - length_of_char) {
-            goto invalid_utf8;
-         }
-      }
-
-      // Check for null character
-      // Null characters are only allowed if the length is provided
-      if (utf8[0] == '\0' || (utf8[0] == '\xc0' && utf8[1] == '\x80')) {
-         if (!length_provided) {
-            goto invalid_utf8;
-         }
-
-         mcommon_string_append (str, "\\u0000");
-         utf8_ulen -= *utf8 ? 2u : 1u;
-         utf8 += *utf8 ? 2 : 1;
-         continue;
-      }
-
-      // Multi-byte UTF-8 sequence
-      if (current_byte > 0x7fu) {
-         const char *utf8_old = utf8;
-         size_t char_len;
-
-         bson_unichar_t unichar = bson_utf8_get_char (utf8);
-
-         if (!unichar) {
-            goto invalid_utf8;
-         }
-
-         mcommon_string_append_unichar (str, unichar);
-         utf8 = bson_utf8_next_char (utf8);
-
-         char_len = (size_t) (utf8 - utf8_old);
-         BSON_ASSERT (utf8_ulen >= char_len);
-         utf8_ulen -= char_len;
-
-         continue;
-      }
-
-      // Special ASCII characters (control chars and misc.)
-      _bson_utf8_handle_special_char (current_byte, str);
-
-      if (current_byte > 0) {
-         utf8++;
-      } else {
-         goto invalid_utf8;
-      }
-
-      utf8_ulen--;
-   } while (utf8_ulen > 0);
-}
-
-
-/*
- *--------------------------------------------------------------------------
- *
- * bson_utf8_get_char --
- *
- *       Fetches the next UTF-8 character from the UTF-8 sequence.
- *
- * Parameters:
- *       @utf8: A string containing validated UTF-8.
- *
- * Returns:
- *       A 32-bit bson_unichar_t reprsenting the multi-byte sequence.
- *
- * Side effects:
- *       None.
- *
- *--------------------------------------------------------------------------
- */
-
-bson_unichar_t
-bson_utf8_get_char (const char *utf8) /* IN */
-{
-   bson_unichar_t c;
-   uint8_t mask;
-   uint8_t num;
-   int i;
-
-   BSON_ASSERT (utf8);
-
-   mcommon_utf8_get_sequence (utf8, &num, &mask);
-   c = (*utf8) & mask;
-
-   for (i = 1; i < num; i++) {
-      c = (c << 6) | (utf8[i] & 0x3F);
-   }
-
-   return c;
-}
-
-
-/*
- *--------------------------------------------------------------------------
- *
- * bson_utf8_next_char --
- *
- *       Returns an incremented pointer to the beginning of the next
- *       multi-byte sequence in @utf8.
- *
- * Parameters:
- *       @utf8: A string containing validated UTF-8.
- *
- * Returns:
- *       An incremented pointer in @utf8.
- *
- * Side effects:
- *       None.
- *
- *--------------------------------------------------------------------------
- */
-
-const char *
-bson_utf8_next_char (const char *utf8) /* IN */
-{
-   uint8_t mask;
-   uint8_t num;
-
-   BSON_ASSERT (utf8);
-
-   mcommon_utf8_get_sequence (utf8, &num, &mask);
-
-   return utf8 + num;
-}
-
-
-/*
- *--------------------------------------------------------------------------
- *
- * bson_utf8_from_unichar --
- *
- *       Converts the unichar to a sequence of utf8 bytes and stores those
- *       in @utf8. The number of bytes in the sequence are stored in @len.
- *
- * Parameters:
- *       @unichar: A bson_unichar_t.
- *       @utf8: A location for the multi-byte sequence.
- *       @len: A location for number of bytes stored in @utf8.
- *
- * Returns:
- *       None.
- *
- * Side effects:
- *       @utf8 is set.
- *       @len is set.
- *
- *--------------------------------------------------------------------------
- */
-
-void
-bson_utf8_from_unichar (bson_unichar_t unichar,                      /* IN */
-                        char utf8[BSON_ENSURE_ARRAY_PARAM_SIZE (6)], /* OUT */
-                        uint32_t *len)                               /* OUT */
-{
-   // Inlined implementation from common-utf8-private
-   mcommon_utf8_from_unichar (unichar, utf8, len);
+   return mcommon_string_append_status (append);
 }
