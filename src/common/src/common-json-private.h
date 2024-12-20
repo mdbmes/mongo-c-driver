@@ -29,12 +29,14 @@
  * @param append A bounded string append, initialized with mcommon_string_append_init()
  * @param str UTF-8 string to escape and append
  * @param len Length of 'str' in bytes
- * @param allow_nul true if internal "00" bytes or "C0 80" sequences should be encoded as "\u0000", false to treat them as invalid data
+ * @param allow_nul true if internal "00" bytes or "C0 80" sequences should be encoded as "\u0000", false to treat them
+ * as invalid data
  * @returns true on success, false if this 'append' has exceeded its max length or if we encountered invalid UTF-8 or
  * disallowed NUL bytes in 'str'
  *
  * The string may include internal NUL characters. It does not need to be NUL terminated.
- * The two-byte sequence "C0 80" is also interpreted as an internal NUL, for historical reasons. This sequence is considered invalid according to RFC3629.
+ * The two-byte sequence "C0 80" is also interpreted as an internal NUL, for historical reasons. This sequence is
+ * considered invalid according to RFC3629.
  */
 bool
 mcommon_json_append_escaped (mcommon_string_append_t *append, const char *str, uint32_t len, bool allow_nul);

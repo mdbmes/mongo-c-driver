@@ -283,13 +283,13 @@ _bson_iso8601_date_parse (const char *str, int32_t len, int64_t *out, bson_error
 
 
 void
-_bson_iso8601_date_format (int64_t msecs_since_epoch, mcommon_string_append_t *append)
+_bson_iso8601_date_format (int64_t msec_since_epoch, mcommon_string_append_t *append)
 {
    time_t t;
-   int64_t msecs_part;
+   int64_t msec_part;
    char buf[64];
 
-   msecs_part = msec_since_epoch % 1000;
+   msec_part = msec_since_epoch % 1000;
    t = (time_t) (msec_since_epoch / 1000);
 
 #ifdef BSON_HAVE_GMTIME_R
@@ -309,8 +309,8 @@ _bson_iso8601_date_format (int64_t msecs_since_epoch, mcommon_string_append_t *a
    strftime (buf, sizeof buf, "%Y-%m-%dT%H:%M:%S", gmtime (&t));
 #endif
 
-   if (msecs_part) {
-      mcommon_string_appendf (append, "%s.%03" PRId64 "Z", buf, msecs_part);
+   if (msec_part) {
+      mcommon_string_appendf (append, "%s.%03" PRId64 "Z", buf, msec_part);
    } else {
       mcommon_string_appendf (append, "%sZ", buf);
    }

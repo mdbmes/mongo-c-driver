@@ -133,7 +133,7 @@ _bson_utf8_handle_special_char (const uint8_t c, mcommon_string_append_t *append
  *       Escapes special characters in @str while appending to @append.
  *
  *       Both " and \ characters will be escaped, and any ASCII control characters.
- * 
+ *
  *       If 'allow_nul' is true, NUL characters and are allowed and encoded as
  *       "\u0000". If 'allow_nul' is false, NUL characters will truncate the
  *       string and cause an unsuccessful return.
@@ -142,12 +142,13 @@ _bson_utf8_handle_special_char (const uint8_t c, mcommon_string_append_t *append
  *       two byte UTF-8 sequence.
  *
  * Parameters:
- *       @utf8: A UTF-8 encoded string.
- *       @utf8_len: The length of @utf8 in bytes or -1 if NUL terminated.
+ *       @str: A UTF-8 encoded string.
+ *       @len: The length of @utf8 in bytes.
+ *       @allow_nul: true to encode NUL or "C0 80" sequences as "\u0000", false to treat them as invalid
  *
  * Returns:
- *       A newly allocated string that should be freed with bson_free().
- *
+ *       true on success. false if the append length limit is exceeded, or we encounter invalid UTF-8 in 'str'.
+ * 
  * Side effects:
  *       None.
  *
@@ -155,56 +156,56 @@ _bson_utf8_handle_special_char (const uint8_t c, mcommon_string_append_t *append
  */
 
 bool
-mcommon_json_append_escaped (mcommon_string_append_t *append, const char *str, uint32_t len, bool allow_nul);
-
-char *
-bson_utf8_escape_for_json (const char *utf8, /* IN */
-                           ssize_t utf8_len) /* IN */
+mcommon_json_append_escaped (mcommon_string_append_t *append, const char *str, uint32_t len, bool allow_nul)
 {
-   bool length_provided = true;
-   size_t utf8_ulen;
+   BSON_ASSERT_PARAM(append);
+   BSON_ASSERT_PARAM(str);
 
-   BSON_ASSERT (utf8);
+   // Gather runs of non-special characters to append at once (at memcpy speeds, faster than iterating over characters)
+   char *run_begin = str;
+   uint32_t run_len = 0;
 
-   if (utf8_len < 0) {
-      length_provided = false;
-      utf8_ulen = strlen (utf8);
+while (len) {
+   if (_is_special_char(*str)) {
+      // Flush run of non-special characters before a special character
+      if (run_len && !mcommon_string_append_bytes(append, run_begin, run_len)) {
+         return false;
+      }
+      run_len = 0;
+
+      // Validate length of UTF-8 sequence
+      uint8_t seq_length, first_mask_unused;
+      mcommon_utf8_get_sequence(str, &seq_length, &first_mask_unused);
+      if (seq_length > len) {
+         // Invalid UTF-8
+         return false;
+      }
+
+
+
+static BSON_INLINE void
+mcommon_utf8_get_sequence (const char *utf8,    /* IN */
+                           uint8_t *seq_length, /* OUT */
+                           uint8_t *first_mask) /* OUT */
+{
+   unsigned char c = *(const unsigned char *) utf8;
+   uint8_t m;
+
    } else {
-      utf8_ulen = (size_t) utf8_len;
+      run_len++
    }
 
-   if (utf8_ulen == 0) {
-      return bson_strdup ("");
-   }
+   str++;
+   len--;
+}
 
-   const char *const end = utf8 + utf8_ulen;
+      return run_len == 0 || mcommon_string_append_bytes(append, run_begin, run_len);
+      }
 
-   mcommon_string_t *const str = _bson_string_alloc (utf8_ulen);
-
-   size_t normal_chars_seen = 0u;
 
    do {
-      const uint8_t current_byte = (uint8_t) utf8[normal_chars_seen];
-      if (!_is_special_char (current_byte)) {
-         // Normal character, no need to do anything besides iterate
-         // Copy rest of the string if we reach the end
-         normal_chars_seen++;
-         utf8_ulen--;
-         if (utf8_ulen == 0) {
-            _bson_string_append_ex (str, utf8, normal_chars_seen);
-            break;
-         }
 
-         continue;
-      }
 
-      // Reached a special character. Copy over all of normal characters
-      // we have passed so far
-      if (normal_chars_seen > 0) {
-         _bson_string_append_ex (str, utf8, normal_chars_seen);
-         utf8 += normal_chars_seen;
-         normal_chars_seen = 0;
-      }
 
       // Check if expected char length goes past end
       // bson_utf8_get_char will crash without this check
@@ -263,12 +264,6 @@ bson_utf8_escape_for_json (const char *utf8, /* IN */
 
       utf8_ulen--;
    } while (utf8_ulen > 0);
-
-   return mcommon_string_free (str, false);
-
-invalid_utf8:
-   mcommon_string_free (str, true);
-   return NULL;
 }
 
 

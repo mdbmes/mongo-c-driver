@@ -40,7 +40,7 @@
  *       UTF-8 strings is that they can be used with strlen() and friends.
  *       However, some languages such as Python can send UTF-8 encoded
  *       strings with NUL's in them.
- * 
+ *
  *       Note that the two-byte sequence "C0 80" is also interpreted as an
  *       internal NUL, for historical reasons. This sequence is considered
  *       invalid according to RFC3629.
@@ -192,6 +192,10 @@ bson_utf8_validate (const char *utf8, /* IN */
  *       Both " and \ characters will be escaped. Additionally, if a NUL
  *       byte is found before @utf8_len bytes, it will be converted to the
  *       two byte UTF-8 sequence.
+ *
+ *       The two-byte sequence "C0 80" is also interpreted as an internal NUL,
+ *       for historical reasons. This sequence is considered invalid according
+ *       to RFC3629.
  *
  * Parameters:
  *       @utf8: A UTF-8 encoded string.
