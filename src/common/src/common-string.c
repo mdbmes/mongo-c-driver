@@ -17,6 +17,8 @@
 #include "common-string-private.h"
 #include "common-bits-private.h"
 #include "common-utf8-private.h"
+#include "common-b64-private.h"
+#include "common-cmp-private.h"
 
 
 mcommon_string_t *
@@ -142,6 +144,47 @@ mcommon_string_append_unichar_internal (mcommon_string_append_t *append, bson_un
    uint32_t actual_sequence_len;
    mcommon_utf8_from_unichar (unichar, temp_buffer, &actual_sequence_len);
    return mcommon_string_append_bytes_internal (append, temp_buffer, actual_sequence_len);
+}
+
+static BSON_INLINE bool
+mcommon_string_append_base64_encode (mcommon_string_append_t *append, const uint8_t *bytes, uint32_t len)
+{
+   if (BSON_UNLIKELY (!mcommon_string_append_status (append))) {
+      return false;
+   }
+
+   mcommon_string_t *string = append->_string;
+   uint32_t old_len = string->len;
+   uint32_t max_len = append->_max_len;
+   BSON_ASSERT (max_len < UINT32_MAX);
+   uint32_t max_append_len = old_len < max_len ? max_len - old_len : 0;
+
+   // Note that mcommon_b64_ntop_calculate_target_size includes room for NUL.
+   size_t encoded_target_len = mcommon_b64_ntop_calculate_target_size ((size_t) len) - 1;
+
+   if (encoded_target_len <= (size_t) max_append_len) {
+      // No truncation needed. Grow the buffer and encode directly.
+      mcommon_string_grow_to_capacity (string, old_len + encoded_target_len);
+      BSON_ASSERT (encoded_target_len ==
+                   mcommon_b64_ntop (bytes, (size_t) len, string->str + old_len, encoded_target_len));
+      BSON_ASSERT (mcommon_in_range_unsigned (uint32_t, encoded_target_len));
+      string->len = old_len + (uint32_t) encoded_target_len;
+      return true;
+   } else {
+      // To avoid the max append length, truncate unencoded source bytes rather than encoded destination bytes.
+      // mcommon_b64_ntop() can't truncate without failing, and we would like not to use a temporary buffer.
+      size_t max_unencoded_len = mcommon_b64_pton_calculate_target_size ((size_t) max_append_len);
+      BSON_ASSERT (mcommon_in_range_unsigned (uint32_t, max_unencoded_len));
+      BSON_ASSERT ((uint32_t) max_unencoded_len < len);
+      size_t truncated_encoded_target_len = mcommon_b64_ntop_calculate_target_size (max_unencoded_len) - 1;
+      mcommon_string_grow_to_capacity (string, old_len + truncated_encoded_target_len);
+      BSON_ASSERT (truncated_encoded_target_len ==
+                   mcommon_b64_ntop (bytes, max_unencoded_len, string->str + old_len, truncated_encoded_target_len));
+      BSON_ASSERT (mcommon_in_range_unsigned (uint32_t, truncated_encoded_target_len));
+      string->len = old_len + (uint32_t) truncated_encoded_target_len;
+      mcommon_string_append_set_overflow (append);
+      return false;
+   }
 }
 
 bool

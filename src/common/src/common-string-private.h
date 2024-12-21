@@ -70,6 +70,7 @@ typedef struct mcommon_string_append_t {
 #define mcommon_string_grow_to_capacity COMMON_NAME (string_grow_to_capacity)
 #define mcommon_string_append_bytes_internal COMMON_NAME (string_append_bytes_internal)
 #define mcommon_string_append_unichar_internal COMMON_NAME (string_append_unichar_internal)
+#define mcommon_string_append_base64_encode COMMON_NAME (string_append_base64_encode)
 #define mcommon_string_appendf COMMON_NAME (string_appendf)
 #define mcommon_string_vappendf COMMON_NAME (string_vappendf)
 
@@ -259,6 +260,16 @@ mcommon_string_append (mcommon_string_append_t *append, const char *str)
 {
    return mcommon_string_append_bytes (append, str, strlen (str));
 }
+
+/**
+ * @brief Append base64 encoded bytes to an mcommon_string_t
+ * @param append Append operation, initialized with mcommon_string_append_init
+ * @param bytes Bytes to be encoded
+ * @param len Number of bytes to encoded
+ * @returns true if the append operation has no permanent error status. false if the max length has been exceeded.
+ */
+bool
+mcommon_string_append_base64_encode (mcommon_string_append_t *append, const uint8_t *bytes, uint32_t len);
 
 /**
  * @brief Append printf() formatted text to a mcommon_string_t

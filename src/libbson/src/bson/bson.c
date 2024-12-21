@@ -24,8 +24,6 @@
 #include <bson/bson-iso8601-private.h>
 #include <common-cmp-private.h>
 
-#include "common-b64-private.h"
-
 #include <string.h>
 #include <math.h>
 

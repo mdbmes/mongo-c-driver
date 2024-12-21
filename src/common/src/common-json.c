@@ -345,7 +345,6 @@ mcommon_json_append_bson_values (
    if (!bson_iter_init (&iter, bson)) {
       return false;
    }
-
    static const bson_visitor_t bson_as_json_visitors = {
       _bson_as_json_visit_before,     _bson_as_json_visit_after,     _bson_as_json_visit_corrupt,
       _bson_as_json_visit_double,     _bson_as_json_visit_utf8,      _bson_as_json_visit_document,
@@ -357,10 +356,9 @@ mcommon_json_append_bson_values (
       _bson_as_json_visit_maxkey,     _bson_as_json_visit_minkey,    NULL, /* visit_unsupported_type */
       _bson_as_json_visit_decimal128,
    };
-   return !bson_iter_visit_all (&iter, bson_as_json_visitors, &state) && !state.is_corrupt &&
+   return !bson_iter_visit_all (&iter, &bson_as_json_visitors, &state) && !state.is_corrupt &&
           mcommon_string_append_status (state.append);
 }
-
 
 /**
  * @brief Test whether a byte may require special processing in mcommon_json_append_escaped.
@@ -421,7 +419,7 @@ mcommon_json_append_escaped (mcommon_string_append_t *append, const char *str, u
    BSON_ASSERT_PARAM (append);
    BSON_ASSERT_PARAM (str);
 
-   // Repeatedly handle runs of non-special bytes punctuated by special bytes.
+   // Repeatedly handle runs of zero or more non-special bytes punctuated by a potentially-special sequence.
    uint32_t non_special_len = mcommon_json_append_escaped_count_non_special_bytes (str, len);
    while (len) {
       if (!mcommon_string_append_bytes (append, str, non_special_len)) {
@@ -500,87 +498,72 @@ mcommon_json_append_escaped (mcommon_string_append_t *append, const char *str, u
    return mcommon_string_append_status (append);
 }
 
-
 bool
 mcommon_json_append_value_double (mcommon_string_append_t *append, double value, bson_json_mode_t mode)
 {
-   bson_json_state_t *state = data;
-   mcommon_string_t *str = state->str;
-   uint32_t start_len;
-   bool legacy;
-
-   BSON_UNUSED (iter);
-   BSON_UNUSED (key);
+   BSON_ASSERT_PARAM (append);
 
    /* Determine if legacy (i.e. unwrapped) output should be used. Relaxed mode
     * will use this for nan and inf values, which we check manually since old
     * platforms may not have isinf or isnan. */
-   legacy = state->mode == BSON_JSON_MODE_LEGACY ||
-            (state->mode == BSON_JSON_MODE_RELAXED && !(v_double != v_double || v_double * 0 != 0));
+   bool legacy = state->mode == BSON_JSON_MODE_LEGACY ||
+                 (state->mode == BSON_JSON_MODE_RELAXED && !(value != value || value * 0 != 0));
 
    if (!legacy) {
-      mcommon_string_append (state->str, "{ \"$numberDouble\" : \"");
+      mcommon_string_append (append, "{ \"$numberDouble\" : \"");
    }
 
-   if (!legacy && v_double != v_double) {
-      mcommon_string_append (str, "NaN");
-   } else if (!legacy && v_double * 0 != 0) {
-      if (v_double > 0) {
-         mcommon_string_append (str, "Infinity");
+   if (!legacy && value != value) {
+      mcommon_string_append (append, "NaN");
+   } else if (!legacy && value * 0 != 0) {
+      if (value > 0) {
+         mcommon_string_append (append, "Infinity");
       } else {
-         mcommon_string_append (str, "-Infinity");
+         mcommon_string_append (append, "-Infinity");
       }
    } else {
-      start_len = str->len;
-      mcommon_string_append_printf (str, "%.20g", v_double);
+      const mcommon_string_t *str = append->string;
+      uint32_t start_len = str->len;
+      mcommon_string_append_printf (append, "%.20g", value);
 
       /* ensure trailing ".0" to distinguish "3" from "3.0" */
       if (strspn (&str->str[start_len], "0123456789-") == str->len - start_len) {
-         mcommon_string_append (str, ".0");
+         mcommon_string_append (append, ".0");
       }
    }
 
    if (!legacy) {
-      mcommon_string_append (state->str, "\" }");
+      mcommon_string_append (append, "\" }");
    }
 
-   return false;
+   return mcommon_string_append_status (append);
 }
-}
-
 
 bool
-mcommon_json_append_value_decimal128 (mcommon_string_append_t *append,
-                                      const bson_decimal128_t *value) bson_json_state_t *state = data;
-char decimal128_string[BSON_DECIMAL128_STRING];
+mcommon_json_append_value_decimal128 (mcommon_string_append_t *append, const bson_decimal128_t *value)
+{
+   BSON_ASSERT_PARAM (append);
+   BSON_ASSERT_PARAM (value);
 
-BSON_UNUSED (iter);
-BSON_UNUSED (key);
+   char decimal128_string[BSON_DECIMAL128_STRING];
+   bson_decimal128_to_string (value, decimal128_string);
 
-bson_decimal128_to_string (value, decimal128_string);
-
-mcommon_string_append (state->str, "{ \"$numberDecimal\" : \"");
-mcommon_string_append (state->str, decimal128_string);
-mcommon_string_append (state->str, "\" }");
-
-return false;
-
+   return mcommon_string_append (append, "{ \"$numberDecimal\" : \"") &&
+          mcommon_string_append (append, decimal128_string) && mcommon_string_append (append, "\" }");
+}
 
 bool
-mcommon_json_append_value_oid (mcommon_string_append_t *append, const bson_oid_t *value);
-bson_json_state_t *state = data;
-char str[25];
+mcommon_json_append_value_oid (mcommon_string_append_t *append, const bson_oid_t *value)
+{
+   BSON_ASSERT_PARAM (append);
+   BSON_ASSERT_PARAM (value);
 
-BSON_UNUSED (iter);
-BSON_UNUSED (key);
+   char oid_str[25];
+   bson_oid_to_string (value, oid_str);
 
-bson_oid_to_string (oid, str);
-mcommon_string_append (state->str, "{ \"$oid\" : \"");
-mcommon_string_append (state->str, str);
-mcommon_string_append (state->str, "\" }");
-
-return false;
-
+   return mcommon_string_append (append, "{ \"$oid\" : \"") && mcommon_string_append (append, oid_str) &&
+          mcommon_string_append (append, "\" }");
+}
 
 bool
 mcommon_json_append_value_binary (mcommon_string_append_t *append,
@@ -588,62 +571,34 @@ mcommon_json_append_value_binary (mcommon_string_append_t *append,
                                   const uint8_t *bytes,
                                   uint32_t byte_count)
 {
-   bson_json_state_t *state = data;
-   size_t b64_len;
-   char *b64;
-
-   BSON_UNUSED (iter);
-   BSON_UNUSED (key);
-
-   b64_len = mcommon_b64_ntop_calculate_target_size (v_binary_len);
-   b64 = bson_malloc0 (b64_len);
-   BSON_ASSERT (mcommon_b64_ntop (v_binary, v_binary_len, b64, b64_len) != -1);
+   BSON_ASSERT_PARAM (append);
+   BSON_ASSERT_PARAM (bytes);
 
    if (state->mode == BSON_JSON_MODE_CANONICAL || state->mode == BSON_JSON_MODE_RELAXED) {
-      mcommon_string_append (state->str, "{ \"$binary\" : { \"base64\" : \"");
-      mcommon_string_append (state->str, b64);
-      mcommon_string_append (state->str, "\", \"subType\" : \"");
-      mcommon_string_append_printf (state->str, "%02x", v_subtype);
-      mcommon_string_append (state->str, "\" } }");
+      return mcommon_string_append (append, "{ \"$binary\" : { \"base64\" : \"") &&
+      mcommon_string_append_base64_encode (append, bytes, byte_count) &&
+      mcommon_string_appendf (append, "\", \"subType\" : \"%02x\" } }", subtype);
    } else {
-      mcommon_string_append (state->str, "{ \"$binary\" : \"");
-      mcommon_string_append (state->str, b64);
-      mcommon_string_append (state->str, "\", \"$type\" : \"");
-      mcommon_string_append_printf (state->str, "%02x", v_subtype);
-      mcommon_string_append (state->str, "\" }");
+      return mcommon_string_append (append, "{ \"$binary\" : \"") &&
+      mcommon_string_append_base64_encode (append, bytes, byte_count) &&
+      mcommon_string_appendf (append, "\", \"$type\" : \"%02x\" }", subtype);
    }
-
-   bson_free (b64);
-
-   return false;
 }
 
 bool
-mcommon_json_append_value_date_time (mcommon_string_append_t *append, int64_t msec_since_epoch, bson_json_mode_t mode);
-
-bson_json_state_t *state = data;
-
-BSON_UNUSED (iter);
-BSON_UNUSED (key);
-
-const int64_t msec_since_Y10K = 253402300800000; // Milliseconds since 10000-01-01T00:00:00Z.
+mcommon_json_append_value_date_time (mcommon_string_append_t *append, int64_t msec_since_epoch, bson_json_mode_t mode)
+{
+   const int64_t y10k = 253402300800000; // 10000-01-01T00:00:00Z in milliseconds since the epoch.
 
 if (state->mode == BSON_JSON_MODE_CANONICAL ||
-    (state->mode == BSON_JSON_MODE_RELAXED && (msec_since_epoch < 0 || msec_since_epoch >= msec_since_Y10K))) {
-   mcommon_string_append (state->str, "{ \"$date\" : { \"$numberLong\" : \"");
-   mcommon_string_append_printf (state->str, "%" PRId64, msec_since_epoch);
-   mcommon_string_append (state->str, "\" } }");
+    (state->mode == BSON_JSON_MODE_RELAXED && (msec_since_epoch < 0 || msec_since_epoch >= y10k))) {
+   return mcommon_string_appendf (append, "{ \"$date\" : { \"$numberLong\" : \"%" PRId64 "\" } }", msec_since_epoch);
 } else if (state->mode == BSON_JSON_MODE_RELAXED) {
-   mcommon_string_append (state->str, "{ \"$date\" : \"");
-   _bson_iso8601_date_format (msec_since_epoch, state->str);
-   mcommon_string_append (state->str, "\" }");
+   return mcommon_string_append (append, "{ \"$date\" : \"") &&
+   _bson_iso8601_date_format (append, msec_since_epoch) &&
+   mcommon_string_append (append, "\" }");
 } else {
-   mcommon_string_append (state->str, "{ \"$date\" : ");
-   mcommon_string_append_printf (state->str, "%" PRId64, msec_since_epoch);
-   mcommon_string_append (state->str, " }");
-}
-
-return false;
+   return mcommon_string_appendf (state->str, "{ \"$date\" : %" PRId64 " }", msec_since_epoch);
 }
 
 bool
