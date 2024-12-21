@@ -195,6 +195,20 @@ mcommon_string_append_status (const mcommon_string_append_t *append)
 }
 
 /**
+ * @brief Signal an explicit overflow during string append
+ * @param append Append operation, initialized with mcommon_string_append_init
+ *
+ * Future calls to mcommon_string_append_status() return false, exactly as if an overlong append was attempted and
+ * failed. This should be used for cases when a logical overflow is occurring but it was detected early enough that no
+ * actual append was attempted.
+ */
+static BSON_INLINE
+mcommon_string_append_set_overflow (mcommon_string_append_t *append)
+{
+   append->_max_len_exceeded = true;
+}
+
+/**
  * @brief Append a valid UTF-8 string with known length to the mcommon_string_t
  * @param append Append operation, initialized with mcommon_string_append_init
  * @param str UTF-8 string to append a copy of
