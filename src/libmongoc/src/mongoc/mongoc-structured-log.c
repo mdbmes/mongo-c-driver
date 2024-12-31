@@ -16,6 +16,8 @@
 
 #include "common-atomic-private.h"
 #include "common-oid-private.h"
+#include "common-string-private.h"
+#include "common-json-private.h"
 #include "common-thread-private.h"
 #include "mongoc-apm-private.h"
 #include "mongoc-error-private.h"
@@ -55,7 +57,7 @@ struct mongoc_structured_log_opts_t {
    mongoc_structured_log_func_t handler_func;
    void *handler_user_data;
    mongoc_structured_log_level_t max_level_per_component[STRUCTURED_LOG_COMPONENT_TABLE_SIZE];
-   int32_t max_document_length;
+   uint32_t max_document_length;
    char *default_handler_path;
 };
 
@@ -268,24 +270,25 @@ mongoc_structured_log_get_named_component (const char *name, mongoc_structured_l
    return false;
 }
 
-static int32_t
+static uint32_t
 _mongoc_structured_log_get_max_document_length_from_env (void)
 {
    const char *variable = "MONGODB_LOG_MAX_DOCUMENT_LENGTH";
    const char *max_length_str = getenv (variable);
+   const uint32_t maximum_representable = UINT32_MAX - 1u;
 
    if (!max_length_str) {
       return MONGOC_STRUCTURED_LOG_DEFAULT_MAX_DOCUMENT_LENGTH;
    }
 
    if (!strcasecmp (max_length_str, "unlimited")) {
-      return BSON_MAX_LEN_UNLIMITED;
+      return maximum_representable;
    }
 
    char *endptr;
    long int_value = strtol (max_length_str, &endptr, 10);
-   if (int_value >= 0 && int_value <= INT32_MAX && endptr != max_length_str && !*endptr) {
-      return (int32_t) int_value;
+   if (int_value >= 0 && int_value <= maximum_representable && endptr != max_length_str && !*endptr) {
+      return (uint32_t) int_value;
    }
 
    // Only log the first instance of each error per process
@@ -489,15 +492,33 @@ mongoc_structured_log_instance_destroy (mongoc_structured_log_instance_t *instan
    }
 }
 
+static void
+_mongoc_structured_log_append_json_truncation_marker (mcommon_string_append_t *append)
+{
+   // The Logging specification mandates that an ellipsis is added to indicate truncation, and the ellipsis length is
+   // not counted against the maximum.
+   if (!mcommon_string_append_status (append)) {
+      mcommon_string_append (append, "...");
+   }
+}
+
 static char *
 _mongoc_structured_log_inner_document_to_json (const bson_t *document,
                                                size_t *length,
                                                const mongoc_structured_log_opts_t *opts)
 {
-   bson_json_opts_t *json_opts = bson_json_opts_new (BSON_JSON_MODE_RELAXED, opts->max_document_length);
-   char *json = bson_as_json_with_opts (document, length, json_opts);
-   bson_json_opts_destroy (json_opts);
-   return json;
+   // Use the bson length as an initial buffer capacity guess
+   mcommon_string_append_t json;
+   mcommon_string_append_init_with_limit (
+      &json, mcommon_string_new_with_capacity ("", 0, document->len), opts->max_document_length);
+
+   if (mcommon_json_append_bson_document (&json, document, BSON_JSON_MODE_RELAXED, BSON_MAX_RECURSION)) {
+      _mongoc_structured_log_append_json_truncation_marker (&json);
+      return mcommon_string_append_destination_destroy_into_buffer (&json);
+   } else {
+      mcommon_string_append_destination_destroy (&json);
+      return NULL;
+   }
 }
 
 const mongoc_structured_log_builder_stage_t *
